@@ -84,3 +84,10 @@ def test_reset_clears_cooldown_and_streak():
 def test_rejects_invalid_parameters(hold, cooldown):
     with pytest.raises(ValueError):
         GestureDebouncer(hold_frames=hold, cooldown_seconds=cooldown)
+
+
+def test_suppress_until_blocks_then_releases():
+    deb = GestureDebouncer(hold_frames=2, cooldown_seconds=0)
+    deb.suppress_until(1.0)
+    assert feed(deb, ["Thumb_Up"] * 5, start=0.0) == [None] * 5
+    assert deb.update("Thumb_Up", 1.01) == "Thumb_Up"  # held throughout, fires once free

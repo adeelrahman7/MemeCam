@@ -158,3 +158,49 @@ def test_left_and_right_reactions_for_same_gesture(root):
 def test_model_validate_without_root_skips_file_checks():
     config = AppConfig.model_validate(minimal(reactions=[{"gesture": "Victory", "image": "x.png"}]))
     assert config.reactions[0].image == "x.png"
+
+
+# --- custom gestures ------------------------------------------------------------------
+def save_custom(root: Path, *names: str) -> None:
+    import numpy as np
+
+    from memecam.gestures.library import GestureLibrary, save_library
+    from memecam.gestures.templates import GestureTemplate
+
+    lib = GestureLibrary(GestureTemplate(n, np.zeros((1, 21, 2))) for n in names)
+    save_library(lib, root / "config" / "custom_gestures.json")
+
+
+def test_shipped_settings_are_valid():
+    from memecam.config import load_settings
+
+    settings = load_settings(default_config_path(), resource_root())
+    assert settings.config.custom_gestures.threshold > 0
+
+
+def test_custom_gesture_reaction_is_accepted_when_recorded(root):
+    from memecam.config import load_settings
+
+    save_custom(root, "rock_on")
+    data = {"reactions": [{"gesture": "rock_on", "image": "assets/memes/a.png"}]}
+    settings = load_settings(write(root, data), root)
+    assert "rock_on" in settings.library
+    assert settings.library_path == root / "config" / "custom_gestures.json"
+
+
+def test_custom_gesture_reaction_must_be_recorded(root):
+    from memecam.config import load_settings
+
+    data = {"reactions": [{"gesture": "rock_on", "image": "assets/memes/a.png"}]}
+    load_config(write(root, data), root)  # the name format alone is fine...
+    with pytest.raises(ConfigError, match=r"reactions\[0\]\.gesture: no recorded custom gesture"):
+        load_settings(write(root, data), root)  # ...but it has to exist
+
+
+def test_broken_library_is_a_config_error(root):
+    from memecam.config import load_settings
+
+    (root / "config").mkdir()
+    (root / "config" / "custom_gestures.json").write_text("{broken")
+    with pytest.raises(ConfigError, match=r"custom_gestures\.json is invalid"):
+        load_settings(write(root, minimal()), root)

@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
-
-import numpy as np
 
 
 class BuiltinGesture(StrEnum):
@@ -60,13 +58,3 @@ class GestureFrame:
 class FrameStats:
     fps: float = 0.0
     inference_ms: float = 0.0
-
-
-@dataclass(slots=True)
-class ProcessedFrame:
-    """A fully rendered BGR frame plus the data used to render it."""
-
-    image_bgr: np.ndarray
-    gestures: GestureFrame = field(default_factory=GestureFrame)
-    stats: FrameStats = field(default_factory=FrameStats)
-    fired_reaction: str | None = None

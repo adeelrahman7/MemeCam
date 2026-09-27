@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import cv2
 import numpy as np
 
-from memecam.core.types import FrameStats, GestureFrame, Handedness
+from memecam.core.types import FrameStats, Handedness
+from memecam.gestures.classifier import GestureSource, HandGesture
 
 # MediaPipe's 21-point hand topology (wrist=0, thumb 1-4, index 5-8, middle 9-12,
 # ring 13-16, pinky 17-20).
@@ -32,11 +35,21 @@ def _text(
     cv2.putText(img, text, org, _FONT, scale, color, thickness, cv2.LINE_AA)
 
 
+def _boxed_text(
+    img: np.ndarray, text: str, org: tuple[int, int], scale: float, color: tuple[int, int, int]
+) -> None:
+    """Small text on a dark box; outlines smear at small sizes."""
+    (tw, th), base = cv2.getTextSize(text, _FONT, scale, 1)
+    x, y = org
+    cv2.rectangle(img, (x - 3, y - th - 3), (x + tw + 3, y + base), (20, 20, 20), -1)
+    cv2.putText(img, text, org, _FONT, scale, color, 1, cv2.LINE_AA)
+
+
 class DebugRenderer:
     def draw(
         self,
         frame_bgr: np.ndarray,
-        gestures: GestureFrame,
+        hands: Sequence[HandGesture],
         stats: FrameStats,
         *,
         candidate: str | None,
@@ -46,7 +59,8 @@ class DebugRenderer:
         h, w = frame_bgr.shape[:2]
         scale = max(0.5, w / 1600)
 
-        for hand in gestures.hands:
+        for hg in hands:
+            hand = hg.hand
             color = _HAND_COLORS[hand.handedness]
             pts = [(round(lm.x * w), round(lm.y * h)) for lm in hand.landmarks]
             for a, b in HAND_CONNECTIONS:
@@ -55,13 +69,21 @@ class DebugRenderer:
             for p in pts:
                 cv2.circle(frame_bgr, p, 4, (255, 255, 255), -1, cv2.LINE_AA)
                 cv2.circle(frame_bgr, p, 4, color, 1, cv2.LINE_AA)
-            if pts:
-                label = f"{hand.handedness.value}: {hand.gesture or '-'}"
-                if hand.gesture:
-                    label += f" {hand.gesture_score:.2f}"
-                wx, wy = pts[0]
-                _text(
-                    frame_bgr, label, (wx - 40, min(h - 10, wy + round(30 * scale))), scale, color
+            if not pts:
+                continue
+            label = f"{hand.handedness.value}: {hg.name or '-'}"
+            if hg.name:
+                label += f" {hg.score:.2f}"
+                if hg.source is GestureSource.CUSTOM:
+                    label += " (custom)"
+            wx, wy = pts[0]
+            y = min(h - 10 - round(28 * scale), wy + round(30 * scale))
+            _text(frame_bgr, label, (wx - 40, y), scale, color)
+            # Nearest custom template + distance: the number to compare against the threshold.
+            if hg.custom is not None and hg.custom.nearest is not None:
+                near = f"nearest {hg.custom.nearest} d={hg.custom.distance:.2f}"
+                _boxed_text(
+                    frame_bgr, near, (wx - 40, y + round(30 * scale)), scale * 0.8, (230, 230, 230)
                 )
 
         line = round(34 * scale)

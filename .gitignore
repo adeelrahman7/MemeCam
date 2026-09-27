@@ -1,8 +1,32 @@
+# Python / uv
 .venv/
 __pycache__/
-*.pyc
-.pytest_cache/
-.ruff_cache/
+*.py[cod]
+*.egg-info/
 dist/
 build/
+
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# MediaPipe models (large binaries, downloaded per README)
 models/*.task
+
+# Leftovers from interrupted config saves (atomic-write temp files)
+*.tmp
+
+# Local environment / secrets
+.env
+
+# Editors
+.vscode/
+.idea/
+
+# OS junk
+Thumbs.db
+desktop.ini
+.DS_Store

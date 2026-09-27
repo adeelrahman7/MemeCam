@@ -64,6 +64,16 @@ class CornerOverlay:
         self._active = key
         self._active_until = now + self._display_seconds
 
+    def hold(self, key: str, now: float, linger_seconds: float) -> None:
+        """Keep the current meme up while its gesture is still held.
+
+        No-op unless ``key`` is the meme already showing; it never starts a new one.
+        After the gesture is released the meme stays ``linger_seconds`` longer (or until
+        its normal ``display_seconds`` end, whichever is later).
+        """
+        if self._active == key:
+            self._active_until = max(self._active_until, now + linger_seconds)
+
     def active(self, now: float) -> str | None:
         if self._active is not None and now >= self._active_until:
             self._active = None

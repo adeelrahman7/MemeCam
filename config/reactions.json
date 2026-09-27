@@ -3,7 +3,8 @@
     "index": 0,
     "width": 1280,
     "height": 720,
-    "mirror": true
+    "mirror": true,
+    "swap_handedness": false
   },
   "inference": {
     "model": "models/gesture_recognizer.task",
@@ -20,13 +21,43 @@
     "corner": "top_right",
     "width_fraction": 0.3,
     "margin_px": 16,
-    "display_seconds": 2.0
+    "display_seconds": 2.0,
+    "stay_while_held": true,
+    "linger_seconds": 0.5
+  },
+  "custom_gestures": {
+    "file": "config/custom_gestures.json",
+    "threshold": 0.2,
+    "rotation_invariant": false,
+    "smoothing": 0.5,
+    "release_factor": 1.3,
+    "countdown_seconds": 3.0,
+    "capture_frames": 45
   },
   "reactions": [
-    { "gesture": "Thumb_Up", "image": "assets/memes/thumbs_up.png" },
-    { "gesture": "Thumb_Down", "image": "assets/memes/thumbs_down.png" },
-    { "gesture": "Victory", "image": "assets/memes/victory.png" },
-    { "gesture": "Open_Palm", "image": "assets/memes/open_palm.png" },
-    { "gesture": "ILoveYou", "image": "assets/memes/i_love_you.png" }
+    {
+      "gesture": "Thumb_Up",
+      "image": "assets/memes/thumbs_up.png"
+    },
+    {
+      "gesture": "Thumb_Down",
+      "image": "assets/memes/thumbs_down.png"
+    },
+    {
+      "gesture": "Victory",
+      "image": "assets/memes/victory.png"
+    },
+    {
+      "gesture": "Open_Palm",
+      "image": "assets/memes/open_palm.png"
+    },
+    {
+      "gesture": "ILoveYou",
+      "image": "assets/memes/i_love_you.png"
+    },
+    {
+      "gesture": "erm_actually",
+      "image": "assets/memes/erm_actually.png"
+    }
   ]
 }

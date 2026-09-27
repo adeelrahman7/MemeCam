@@ -20,13 +20,31 @@ class ModelNotFoundError(FileNotFoundError):
     pass
 
 
+def _opposite(hand: Handedness) -> Handedness:
+    return Handedness.LEFT if hand is Handedness.RIGHT else Handedness.RIGHT
+
+
+def resolve_handedness(label: str, *, input_is_mirrored: bool, swap: bool) -> Handedness:
+    """Convert MediaPipe's handedness label into the user's real hand.
+
+    Tested on a Windows webcam, the Tasks API labels hands as they'd be named in an
+    ordinary (non-mirrored) photo. So when we feed it the mirrored selfie frame, its
+    labels come out backwards and get swapped here. ``swap`` is a manual override for
+    cameras that don't match this (e.g. drivers that already mirror their output).
+    """
+    hand = Handedness(label)
+    if input_is_mirrored:
+        hand = _opposite(hand)
+    if swap:
+        hand = _opposite(hand)
+    return hand
+
+
 class GestureTracker:
     """Runs GestureRecognizer in VIDEO mode on RGB frames.
 
-    Handedness: MediaPipe labels hands *assuming the input is mirrored* (a selfie view).
-    When we feed it the mirrored frame, "Right" really is the user's right hand, and that
-    hand also appears on the right side of the mirrored preview. If the input is not mirrored
-    we swap the label so ``HandDetection.handedness`` always means the user's real hand.
+    ``HandDetection.handedness`` always means the user's real hand; see
+    ``resolve_handedness`` for how MediaPipe's label is converted.
     """
 
     def __init__(
@@ -37,6 +55,7 @@ class GestureTracker:
         min_detection_confidence: float,
         min_gesture_score: float,
         input_is_mirrored: bool,
+        swap_handedness: bool = False,
     ) -> None:
         if not model_path.is_file():
             raise ModelNotFoundError(
@@ -56,6 +75,7 @@ class GestureTracker:
         self._recognizer = vision.GestureRecognizer.create_from_options(options)
         self._min_gesture_score = min_gesture_score
         self._input_is_mirrored = input_is_mirrored
+        self._swap_handedness = swap_handedness
         self._last_timestamp_ms = -1
 
     def process(self, frame_rgb: np.ndarray, timestamp_ms: int) -> GestureFrame:
@@ -69,9 +89,11 @@ class GestureTracker:
         hands: list[HandDetection] = []
         for i, landmarks in enumerate(result.hand_landmarks):
             hand_cat = result.handedness[i][0]
-            handedness = Handedness(hand_cat.category_name)
-            if not self._input_is_mirrored:
-                handedness = Handedness.LEFT if handedness is Handedness.RIGHT else Handedness.RIGHT
+            handedness = resolve_handedness(
+                hand_cat.category_name,
+                input_is_mirrored=self._input_is_mirrored,
+                swap=self._swap_handedness,
+            )
 
             gesture: str | None = None
             gesture_score = 0.0

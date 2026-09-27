@@ -8,7 +8,7 @@ from pathlib import Path
 
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-from memecam.config import ConfigError, load_config
+from memecam.config import ConfigError, load_settings
 from memecam.core.frame_worker import FrameWorker
 from memecam.paths import default_config_path, resource_root
 from memecam.ui.main_window import MainWindow
@@ -36,14 +36,14 @@ def main(argv: list[str] | None = None) -> int:
     root = resource_root()
     config_path = args.config or default_config_path()
     try:
-        config = load_config(config_path, root)
+        settings = load_settings(config_path, root)
     except ConfigError as exc:
         print(f"Config error:\n{exc}", file=sys.stderr)
         QMessageBox.critical(None, "MemeCam: config error", str(exc))
         return 2
 
-    worker = FrameWorker(config, root)
-    window = MainWindow(worker)
+    worker = FrameWorker(settings)
+    window = MainWindow(worker, settings)
     if args.debug:
         window.enable_debug()
     window.show()

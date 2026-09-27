@@ -62,6 +62,10 @@ class GestureDebouncer:
         self._cooldown_until = now + self._cooldown_seconds
         return gesture
 
+    def suppress_until(self, until: float) -> None:
+        """Block all gestures until ``until`` (extends, never shortens, the cooldown)."""
+        self._cooldown_until = max(self._cooldown_until, until)
+
     def reset(self) -> None:
         self._candidate = None
         self._streak = 0

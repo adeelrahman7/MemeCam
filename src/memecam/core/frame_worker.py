@@ -14,7 +14,10 @@ from PySide6.QtGui import QImage
 from memecam.config import Settings
 from memecam.core.camera import Camera, CameraError
 from memecam.core.pipeline import FramePipeline
+from memecam.gestures.recorder import RecorderStatus, RecordPhase
+from memecam.gestures.templates import GestureKind
 from memecam.paths import resolve_resource
+from memecam.tracking.face_tracker import FACE_MODEL_URL, FaceTracker
 from memecam.tracking.gesture_tracker import GestureTracker, ModelNotFoundError
 
 _MAX_CONSECUTIVE_READ_FAILURES = 30
@@ -31,6 +34,7 @@ def bgr_to_qimage(frame_bgr: np.ndarray) -> QImage:
 @dataclass(frozen=True, slots=True)
 class _StartRecording:
     name: str
+    kind: GestureKind
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +61,7 @@ class FrameWorker(QThread):
     stats_ready = Signal(object)  # FrameStats
     reaction_fired = Signal(str)
     recording_updated = Signal(object)  # RecorderStatus
+    warning = Signal(str)  # non-fatal problem, e.g. face model missing
     failed = Signal(str)
 
     def __init__(self, settings: Settings) -> None:
@@ -64,6 +69,8 @@ class FrameWorker(QThread):
         self._settings = settings
         self._debug = threading.Event()
         self._commands: queue.SimpleQueue[_Command] = queue.SimpleQueue()
+        self._face_tracker: FaceTracker | None = None
+        self._face_error: str | None = None
 
     # --- thread-safe API for the UI thread -------------------------------------------
     def set_debug(self, enabled: bool) -> None:
@@ -72,8 +79,8 @@ class FrameWorker(QThread):
         else:
             self._debug.clear()
 
-    def start_recording(self, name: str) -> None:
-        self._commands.put(_StartRecording(name))
+    def start_recording(self, name: str, kind: GestureKind = GestureKind.HAND) -> None:
+        self._commands.put(_StartRecording(name, kind))
 
     def cancel_recording(self) -> None:
         self._commands.put(_CancelRecording())
@@ -115,7 +122,37 @@ class FrameWorker(QThread):
             self.failed.emit(f"Frame worker crashed: {exc!r}")
         finally:
             tracker.close()
+            if self._face_tracker is not None:
+                self._face_tracker.close()
             camera.release()
+
+    def _ensure_face_tracker(
+        self, settings: Settings, *, force: bool = False
+    ) -> FaceTracker | None:
+        """Create the face tracker the first time something needs it (face overlays, recorded
+        face expressions, or ``force`` when starting to record a face expression).
+
+        A missing/broken face model isn't fatal: hand gestures keep working, and the user
+        gets a warning explaining how to enable face features.
+        """
+        if self._face_tracker is not None or not (force or settings.needs_face_tracking):
+            return self._face_tracker
+        face = settings.config.face
+        try:
+            self._face_tracker = FaceTracker(
+                resolve_resource(face.model, settings.root),
+                num_faces=face.num_faces,
+                min_confidence=face.min_confidence,
+            )
+        except (ModelNotFoundError, RuntimeError, ValueError) as exc:
+            message = f"Face overlays and face expressions are disabled.\n\n{exc}"
+            if not force and message != self._face_error:  # don't repeat the same warning
+                self._face_error = message
+                self.warning.emit(message)
+        return self._face_tracker
+
+    def _make_pipeline(self, settings: Settings, tracker: GestureTracker) -> FramePipeline:
+        return FramePipeline(settings, tracker, self._ensure_face_tracker(settings))
 
     def _drain_commands(self, pipeline: FramePipeline, tracker: GestureTracker) -> FramePipeline:
         while True:
@@ -124,17 +161,37 @@ class FrameWorker(QThread):
             except queue.Empty:
                 return pipeline
             match cmd:
-                case _StartRecording(name):
-                    pipeline.start_recording(name, time.monotonic())
+                case _StartRecording(name, kind):
+                    pipeline = self._start_recording(pipeline, tracker, name, kind)
                 case _CancelRecording():
                     pipeline.cancel_recording()
                 case _ApplySettings(settings):
                     # Camera/model options need a restart; reactions and gestures don't.
                     self._settings = settings
-                    pipeline = FramePipeline(settings, tracker)
+                    pipeline = self._make_pipeline(settings, tracker)
+
+    def _start_recording(
+        self, pipeline: FramePipeline, tracker: GestureTracker, name: str, kind: GestureKind
+    ) -> FramePipeline:
+        if kind is GestureKind.FACE and not pipeline.has_face_tracker:
+            if self._ensure_face_tracker(self._settings, force=True) is None:
+                self.recording_updated.emit(
+                    RecorderStatus(
+                        name,
+                        RecordPhase.FAILED,
+                        kind,
+                        message="Recording a face expression needs the face model.\n\n"
+                        f"Download it from:\n  {FACE_MODEL_URL}\n"
+                        "and save it as face_landmarker.task in the models/ folder.",
+                    )
+                )
+                return pipeline
+            pipeline = self._make_pipeline(self._settings, tracker)
+        pipeline.start_recording(name, time.monotonic(), kind)
+        return pipeline
 
     def _loop(self, camera: Camera, tracker: GestureTracker) -> None:
-        pipeline = FramePipeline(self._settings, tracker)
+        pipeline = self._make_pipeline(self._settings, tracker)
         failures = 0
         while not self.isInterruptionRequested():
             pipeline = self._drain_commands(pipeline, tracker)

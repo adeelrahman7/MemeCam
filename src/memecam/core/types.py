@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
+import numpy as np
+
 
 class BuiltinGesture(StrEnum):
     """Gesture labels produced by MediaPipe's canned gesture_recognizer.task model."""
@@ -52,6 +54,23 @@ class GestureFrame:
     """Everything the gesture tracker found in one frame."""
 
     hands: tuple[HandDetection, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class FaceDetection:
+    """One detected face: MediaPipe face-mesh landmarks as an (N, 3) array of normalized
+    x, y (0..1 of the frame) and relative depth z. N is 478 (468 mesh points + 10 iris)."""
+
+    landmarks: np.ndarray
+    # 52 expression scores (0..1) in MediaPipe's blendshape order, or None if unavailable.
+    blendshapes: np.ndarray | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class FaceFrame:
+    """Everything the face tracker found in one frame."""
+
+    faces: tuple[FaceDetection, ...] = ()
 
 
 @dataclass(slots=True)

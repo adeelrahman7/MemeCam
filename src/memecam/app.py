@@ -12,6 +12,7 @@ from memecam.config import ConfigError, load_settings
 from memecam.core.frame_worker import FrameWorker
 from memecam.paths import default_config_path, resource_root
 from memecam.ui.main_window import MainWindow
+from memecam.ui.theme import apply_theme
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
@@ -32,6 +33,7 @@ def main(argv: list[str] | None = None) -> int:
     args = _parse_args(sys.argv[1:] if argv is None else argv)
     app = QApplication(sys.argv[:1])
     app.setApplicationName("MemeCam")
+    apply_theme(app)
 
     root = resource_root()
     config_path = args.config or default_config_path()

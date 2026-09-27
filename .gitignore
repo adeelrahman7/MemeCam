@@ -30,3 +30,13 @@ models/*.task
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# personal setup and downloaded memes (not for the public repo)
+config/my_*.json
+config/custom_gestures.json
+assets/memes/*.png
+!assets/memes/thumbs_up.png
+!assets/memes/thumbs_down.png
+!assets/memes/victory.png
+!assets/memes/open_palm.png
+!assets/memes/i_love_you.png

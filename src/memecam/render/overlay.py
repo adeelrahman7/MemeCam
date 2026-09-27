@@ -37,7 +37,8 @@ class CornerOverlay:
     """Draws the currently active reaction image in a frame corner.
 
     Images are decoded once up front; resized copies are cached per target width so the
-    per-frame cost is just the blend.
+    per-frame cost is just the blend. ``corners`` can give individual reactions their own
+    corner; everything else uses ``corner``.
     """
 
     def __init__(
@@ -45,12 +46,14 @@ class CornerOverlay:
         images: dict[str, Path],
         *,
         corner: Corner,
+        corners: dict[str, Corner] | None = None,
         width_fraction: float,
         margin_px: int,
         display_seconds: float,
     ) -> None:
         self._sources = {key: load_bgra(path) for key, path in images.items()}
         self._corner = corner
+        self._corners = dict(corners or {})
         self._width_fraction = width_fraction
         self._margin = margin_px
         self._display_seconds = display_seconds
@@ -86,8 +89,9 @@ class CornerOverlay:
         img = self._scaled_image(key, frame_bgr.shape[1])
         fh, fw = frame_bgr.shape[:2]
         ih, iw = img.shape[:2]
-        left = self._corner in (Corner.TOP_LEFT, Corner.BOTTOM_LEFT)
-        top = self._corner in (Corner.TOP_LEFT, Corner.TOP_RIGHT)
+        corner = self._corners.get(key, self._corner)
+        left = corner in (Corner.TOP_LEFT, Corner.BOTTOM_LEFT)
+        top = corner in (Corner.TOP_LEFT, Corner.TOP_RIGHT)
         x = self._margin if left else fw - iw - self._margin
         y = self._margin if top else fh - ih - self._margin
         alpha_blend(frame_bgr, img, x, y)

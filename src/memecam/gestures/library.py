@@ -1,4 +1,4 @@
-"""custom_gestures.json: the saved hand-pose templates (schema, load, save)."""
+"""custom_gestures.json: saved hand poses and face expressions (schema, load, save)."""
 
 from __future__ import annotations
 
@@ -13,7 +13,12 @@ import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from memecam.core.types import Handedness
-from memecam.gestures.templates import NUM_LANDMARKS, GestureTemplate
+from memecam.gestures.templates import (
+    NUM_BLENDSHAPES,
+    NUM_LANDMARKS,
+    GestureKind,
+    GestureTemplate,
+)
 
 # Custom names are lowercase snake_case, so they can never collide with MediaPipe's
 # built-in labels (which are Capitalized, e.g. "Thumb_Up").
@@ -36,14 +41,28 @@ def validate_custom_name(name: str) -> str | None:
 
 
 _Point = tuple[float, float]
-_Sample = Annotated[list[_Point], Field(min_length=NUM_LANDMARKS, max_length=NUM_LANDMARKS)]
+_HandSample = Annotated[list[_Point], Field(min_length=NUM_LANDMARKS, max_length=NUM_LANDMARKS)]
+_FaceSample = Annotated[list[float], Field(min_length=NUM_BLENDSHAPES, max_length=NUM_BLENDSHAPES)]
 
 
 class _TemplateModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: Annotated[str, Field(pattern=CUSTOM_NAME_PATTERN)]
+    kind: GestureKind = GestureKind.HAND  # files from before face gestures have no "kind"
     recorded_with: Handedness | None = None
-    samples: Annotated[list[_Sample], Field(min_length=1)]
+    samples: Annotated[list[_HandSample] | list[_FaceSample], Field(min_length=1)]
+
+    @model_validator(mode="after")
+    def _samples_match_kind(self) -> Self:
+        is_face_data = isinstance(self.samples[0][0], float | int)
+        if is_face_data != (self.kind is GestureKind.FACE):
+            expected = (
+                f"lists of {NUM_BLENDSHAPES} scores"
+                if self.kind is GestureKind.FACE
+                else f"lists of {NUM_LANDMARKS} [x, y] points"
+            )
+            raise ValueError(f"samples for a {self.kind} gesture must be {expected}")
+        return self
 
 
 class _LibraryModel(BaseModel):
@@ -84,18 +103,36 @@ class GestureLibrary:
         """Return a copy with ``template`` added (replacing any template with the same name)."""
         return GestureLibrary([*(t for t in self.templates if t.name != template.name), template])
 
+    def of_kind(self, kind: GestureKind) -> list[GestureTemplate]:
+        return [t for t in self._templates.values() if t.kind is kind]
+
+    def kind_of(self, name: str) -> GestureKind | None:
+        t = self._templates.get(name)
+        return t.kind if t else None
+
+    def without(self, name: str) -> GestureLibrary:
+        """Return a copy with the template called ``name`` removed (no-op if absent)."""
+        return GestureLibrary(t for t in self.templates if t.name != name)
+
     def to_json(self) -> str:
         model = _LibraryModel(
             gestures=[
                 _TemplateModel(
                     name=t.name,
+                    kind=t.kind,
                     recorded_with=t.recorded_with,
-                    samples=[[(round(x, 4), round(y, 4)) for x, y in s] for s in t.samples],
+                    samples=_rounded_samples(t),
                 )
                 for t in self.templates
             ]
         )
         return model.model_dump_json(indent=2) + "\n"
+
+
+def _rounded_samples(t: GestureTemplate) -> list[list[float]] | list[list[_Point]]:
+    if t.kind is GestureKind.FACE:
+        return [[round(float(v), 4) for v in s] for s in t.samples]
+    return [[(round(float(x), 4), round(float(y), 4)) for x, y in s] for s in t.samples]
 
 
 def load_library(path: Path) -> GestureLibrary:
@@ -118,6 +155,7 @@ def load_library(path: Path) -> GestureLibrary:
             name=g.name,
             samples=np.array(g.samples, dtype=np.float64),
             recorded_with=g.recorded_with,
+            kind=g.kind,
         )
         for g in model.gestures
     )

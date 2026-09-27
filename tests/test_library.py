@@ -74,3 +74,32 @@ def test_valid_names(name):
 @pytest.mark.parametrize("name", ["", "a", "Rock", "Thumb_Up", "2cool", "has space", "x" * 33])
 def test_invalid_names(name):
     assert validate_custom_name(name) is not None
+
+
+def test_face_templates_roundtrip_and_old_files_default_to_hand(tmp_path):
+    from memecam.gestures.templates import GestureKind
+
+    path = tmp_path / "custom_gestures.json"
+    face = GestureTemplate("shocked_face", np.full((2, 52), 0.123456), kind=GestureKind.FACE)
+    save_library(GestureLibrary([tpl("rock_on"), face]), path)
+    raw = json.loads(path.read_text())
+    assert raw["gestures"][1]["kind"] == "face"
+    assert raw["gestures"][1]["samples"][0][0] == 0.1235
+    lib = load_library(path)
+    assert lib.kind_of("shocked_face") is GestureKind.FACE
+    assert lib.kind_of("rock_on") is GestureKind.HAND
+    assert [t.name for t in lib.of_kind(GestureKind.FACE)] == ["shocked_face"]
+    assert lib.kind_of("nope") is None
+
+    del raw["gestures"][0]["kind"]  # files written before face gestures existed
+    path.write_text(json.dumps(raw))
+    assert load_library(path).kind_of("rock_on") is GestureKind.HAND
+
+
+def test_kind_and_samples_must_agree(tmp_path):
+    path = tmp_path / "custom_gestures.json"
+    path.write_text(json.dumps({"gestures": [
+        {"name": "mixed_up", "kind": "face", "samples": [[[0.0, 0.0]] * 21]}
+    ]}))  # fmt: skip
+    with pytest.raises(LibraryError, match="face gesture must be lists of 52 scores"):
+        load_library(path)

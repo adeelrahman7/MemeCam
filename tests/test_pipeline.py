@@ -143,3 +143,170 @@ def test_flash_mode_hides_meme_after_display_seconds(tmp_path, settings):
     held = run(pipe, 150, 0.0)
     assert _meme_visible(held[30].image_bgr)
     assert not _meme_visible(held[-1].image_bgr)  # gone after 2 s even though still held
+
+
+# --- face overlays --------------------------------------------------------------------
+class FakeFaceTracker:
+    def __init__(self) -> None:
+        from memecam.core.types import FaceFrame
+
+        self.current = FaceFrame()
+
+    def process(self, frame_rgb: np.ndarray, timestamp_ms: int):
+        return self.current
+
+
+@pytest.fixture
+def face_settings(settings):
+    from PIL import Image
+
+    Image.new("RGBA", (60, 20), (255, 0, 255, 255)).save(settings.root / "assets/glasses.png")
+    raw = json.loads(settings.config_path.read_text())
+    raw["face"] = {"smoothing": 0}
+    raw["face_overlays"] = [
+        {"image": "assets/glasses.png", "anchor": "eyes", "width": 1.2},  # always on
+        {"image": "assets/memes/rock.png", "anchor": "forehead", "width": 1.0,
+         "offset_y": -0.5, "trigger": "Closed_Fist", "linger_seconds": 0.2},
+    ]  # fmt: skip
+    settings.config_path.write_text(json.dumps(raw))
+    return load_settings(settings.config_path, settings.root)
+
+
+MAGENTA, RED_BGR = (255, 0, 255), (0, 0, 255)
+
+
+def test_face_overlays_follow_face_and_trigger(face_settings):
+    from faces import face_detection
+    from memecam.core.types import FaceFrame
+
+    hands, faces = FakeTracker(), FakeFaceTracker()
+    pipe = FramePipeline(face_settings, hands, faces)
+
+    # No face: nothing drawn.
+    r = pipe.process(frame(), 0.0)
+    assert r.faces_px == ()
+    assert tuple(r.image_bgr[300, 640]) == (50, 50, 50)
+
+    # Face at (640, 300) with 100 px eye distance: always-on glasses over the eyes.
+    faces.current = FaceFrame((face_detection(center=(640, 300), eye_dist=100),))
+    r = pipe.process(frame(), 0.1)
+    assert len(r.faces_px) == 1
+    assert tuple(r.image_bgr[300, 640]) == MAGENTA
+    assert tuple(r.image_bgr[300, 710]) == (50, 50, 50)  # 120 px wide → ends at x=700
+    assert tuple(r.image_bgr[190, 640]) == (50, 50, 50)  # crown not triggered yet
+
+    # Hold a fist: after hold_frames (3) the forehead overlay appears above y=200.
+    tracker_hand = detection("fist", gesture="Closed_Fist")
+    hands.current = (tracker_hand,)
+    results = run(pipe, 4, 1.0)
+    assert tuple(results[0].image_bgr[190, 640]) == (50, 50, 50)
+    assert tuple(results[-1].image_bgr[190, 640]) == RED_BGR
+
+    # Release: lingers 0.2 s, then gone.
+    hands.current = ()
+    assert tuple(pipe.process(frame(), 1.2).image_bgr[190, 640]) == RED_BGR
+    assert tuple(pipe.process(frame(), 1.6).image_bgr[190, 640]) == (50, 50, 50)
+
+
+def test_face_overlays_need_a_face_tracker(face_settings):
+    # Without one (e.g. model missing), hand gestures still work and nothing crashes.
+    hands = FakeTracker()
+    pipe = FramePipeline(face_settings, hands, None)
+    hands.current = (detection("fist", gesture="Thumb_Up"),)
+    fired = [r.fired_reaction for r in run(pipe, 4, 0.0)]
+    assert "Thumb_Up" in fired
+
+
+def test_face_tracker_not_used_without_face_overlays(settings):
+    class Exploding:
+        def process(self, *a):
+            raise AssertionError("face tracker should not run")
+
+    FramePipeline(settings, FakeTracker(), Exploding()).process(frame(), 0.0)
+
+
+# --- face expressions -----------------------------------------------------------------
+def test_record_face_expression_then_trigger_meme_and_overlay(settings):
+    from faces import expression, face_detection
+    from memecam.core.types import FaceFrame
+    from memecam.gestures.templates import GestureKind
+
+    hands, faces = FakeTracker(), FakeFaceTracker()
+    pipe = FramePipeline(settings, hands, faces)
+
+    def show(expr: str, **kw) -> None:
+        faces.current = FaceFrame(
+            (face_detection(center=(640, 300), eye_dist=100, blendshapes=expression(expr, **kw)),)
+        )
+
+    # 1. Record a shocked face (the hand in view is ignored).
+    hands.current = (detection("fist", gesture="Thumb_Up"),)
+    show("shocked", jitter=0.02)
+    pipe.start_recording("shocked_face", 0.0, GestureKind.FACE)
+    results = run(pipe, 60, 0.0)
+    done = [r.recording for r in results if r.recording and r.recording.phase is RecordPhase.DONE]
+    assert len(done) == 1 and done[0].template.kind is GestureKind.FACE
+
+    # 2. Save with a meme; also make it trigger a face overlay.
+    s = save_recorded_gesture(settings, done[0].template, settings.root / "assets/memes/rock.png")
+    raw = json.loads(s.config_path.read_text())
+    raw["face"] = {"smoothing": 0}
+    raw["face_overlays"] = [{"image": "assets/memes/up.png", "anchor": "eyes", "width": 1.0,
+                             "trigger": "shocked_face", "linger_seconds": 0}]  # fmt: skip
+    s.config_path.write_text(json.dumps(raw))
+    s = load_settings(s.config_path, s.root)
+    assert s.needs_face_tracking
+    pipe = FramePipeline(s, hands, faces)
+    hands.current = ()
+
+    # 3. Neutral face: nothing. Shocked face: meme + overlay after hold_frames (3).
+    show("neutral")
+    r = pipe.process(frame(), 10.0)
+    assert r.face_gestures[0].name is None and r.fired_reaction is None
+    show("shocked", jitter=0.03, seed=9)
+    results = run(pipe, 4, 11.0)
+    assert results[-1].face_gestures[0].name == "shocked_face"
+    assert "shocked_face" in [x.fired_reaction for x in results]
+    img = results[-1].image_bgr
+    assert tuple(img[40, 1200]) == (0, 0, 255)  # red meme in the corner
+    assert tuple(img[300, 640]) == (0, 255, 0)  # green overlay on the eyes
+
+
+def test_face_recording_requires_face_tracker(settings):
+    from memecam.gestures.templates import GestureKind
+
+    pipe = FramePipeline(settings, FakeTracker(), None)
+    assert not pipe.has_face_tracker
+    with pytest.raises(RuntimeError, match="face tracker"):
+        pipe.start_recording("x_face", 0.0, GestureKind.FACE)
+
+
+def test_face_tracker_runs_only_while_recording_a_face(settings):
+    from memecam.gestures.templates import GestureKind
+
+    calls = []
+
+    class Counting(FakeFaceTracker):
+        def process(self, frame_rgb, timestamp_ms):
+            calls.append(timestamp_ms)
+            return super().process(frame_rgb, timestamp_ms)
+
+    pipe = FramePipeline(settings, FakeTracker(), Counting())
+    pipe.process(frame(), 0.0)
+    assert calls == []  # hand-only setup: face model idle
+    pipe.start_recording("x_face", 0.1, GestureKind.FACE)
+    pipe.process(frame(), 0.2)
+    assert len(calls) == 1
+
+
+def test_reaction_can_use_its_own_corner(settings):
+    raw = json.loads(settings.config_path.read_text())
+    raw["reactions"][0]["corner"] = "bottom_left"
+    settings.config_path.write_text(json.dumps(raw))
+    s = load_settings(settings.config_path, settings.root)
+    tracker = FakeTracker()
+    pipe = FramePipeline(s, tracker)
+    tracker.current = (detection("fist", gesture="Thumb_Up"),)
+    img = run(pipe, 4, 0.0)[-1].image_bgr
+    assert tuple(img[700, 60]) == (0, 255, 0)  # bottom-left
+    assert tuple(img[40, 1200]) == (50, 50, 50)  # not top-right

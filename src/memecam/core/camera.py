@@ -22,8 +22,10 @@ class Camera:
                 f"Could not open camera {index}. Is another app using it, or does the "
                 "OS need camera permission for your terminal/Python?"
             )
+        # self._cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        # self._cap.set(cv2.CAP_PROP_SETTINGS, 1)
 
     def read(self) -> np.ndarray | None:
         """Return the next BGR frame, or None if the camera didn't deliver one."""

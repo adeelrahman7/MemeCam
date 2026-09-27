@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 
 from memecam.gestures.recorder import RecorderStatus, RecordPhase
+from memecam.gestures.templates import GestureKind
 
 _FONT = cv2.FONT_HERSHEY_SIMPLEX
 
@@ -26,20 +27,27 @@ class RecordingRenderer:
     def draw(self, frame_bgr: np.ndarray, status: RecorderStatus) -> None:
         h, w = frame_bgr.shape[:2]
         s = max(0.6, w / 1280)
+        face = status.kind is GestureKind.FACE
 
         # Red frame border = "recording".
         cv2.rectangle(frame_bgr, (0, 0), (w - 1, h - 1), (40, 40, 230), max(4, round(8 * s)))
-        _centered_text(frame_bgr, f"Recording: {status.name}", round(60 * s), 1.0 * s,
-                       (255, 255, 255))  # fmt: skip
+        title = f"Recording {'face' if face else 'hand'}: {status.name}"
+        _centered_text(frame_bgr, title, round(60 * s), 1.0 * s, (255, 255, 255))
 
         if status.phase is RecordPhase.COUNTDOWN:
             # Kept in the top third so it doesn't cover the hand you're posing.
             count = str(max(1, math.ceil(status.seconds_left)))
-            _centered_text(frame_bgr, "Get your pose ready", round(115 * s), 0.9 * s,
+            ready = "Get your face ready" if face else "Get your pose ready"
+            _centered_text(frame_bgr, ready, round(115 * s), 0.9 * s,
                            (255, 255, 255))  # fmt: skip
             _centered_text(frame_bgr, count, round(200 * s), 2.6 * s, (80, 220, 255))
         elif status.phase is RecordPhase.CAPTURING:
-            _centered_text(frame_bgr, "Hold it... move it slightly for variety", h - round(110 * s),
+            hold = (
+                "Hold the expression... tilt your head a little"
+                if face
+                else "Hold it... move it slightly for variety"
+            )
+            _centered_text(frame_bgr, hold, h - round(110 * s),
                            0.9 * s, (255, 255, 255))  # fmt: skip
             bar_w, bar_h = round(w * 0.5), round(22 * s)
             x0, y0 = (w - bar_w) // 2, h - round(70 * s)

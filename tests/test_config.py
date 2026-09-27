@@ -102,11 +102,40 @@ def test_bad_enum_value(root):
         load_config(write(root, minimal(overlay={"corner": "middle"})), root)
 
 
-def test_reactions_required_and_non_empty(root):
-    with pytest.raises(ConfigError, match=r"reactions: Field required"):
-        load_config(write(root, {}), root)
-    with pytest.raises(ConfigError, match=r"reactions: List should have at least 1 item"):
-        load_config(write(root, {"reactions": []}), root)
+def test_empty_config_is_allowed(root):
+    # e.g. after deleting every gesture: the app just shows the camera.
+    for data in ({}, {"reactions": [], "face_overlays": []}):
+        config = load_config(write(root, data), root)
+        assert config.reactions == [] and config.face_overlays == []
+
+
+def test_face_overlay_defaults_and_validation(root):
+    data = minimal(face_overlays=[{"image": "assets/memes/a.png", "anchor": "forehead"}])
+    overlay = load_config(write(root, data), root).face_overlays[0]
+    assert overlay.trigger is None and overlay.width == 1.5 and overlay.offset_y == 0.0
+
+    bad = minimal(
+        face_overlays=[
+            {"image": "assets/memes/nope.png", "anchor": "ears", "width": 0, "trigger": "Wave"}
+        ]
+    )
+    with pytest.raises(ConfigError) as exc:
+        load_config(write(root, bad), root)
+    msg = str(exc.value)
+    for field in ("image", "anchor", "width", "trigger"):
+        assert f"face_overlays[0].{field}" in msg
+
+
+def test_face_overlay_custom_trigger_must_be_recorded(root):
+    from memecam.config import load_settings
+
+    data = minimal(
+        face_overlays=[{"image": "assets/memes/a.png", "anchor": "eyes", "trigger": "rock_on"}]
+    )
+    with pytest.raises(ConfigError, match=r"face_overlays\[0\]\.trigger: no recorded custom"):
+        load_settings(write(root, data), root)
+    save_custom(root, "rock_on")
+    assert load_settings(write(root, data), root).config.face_overlays[0].trigger == "rock_on"
 
 
 def test_all_problems_reported_at_once(root):
@@ -204,3 +233,39 @@ def test_broken_library_is_a_config_error(root):
     (root / "config" / "custom_gestures.json").write_text("{broken")
     with pytest.raises(ConfigError, match=r"custom_gestures\.json is invalid"):
         load_settings(write(root, minimal()), root)
+
+
+def test_face_expression_reactions(root):
+    import numpy as np
+
+    from memecam.config import load_settings
+    from memecam.core.types import Handedness
+    from memecam.gestures.library import GestureLibrary, save_library
+    from memecam.gestures.templates import GestureKind, GestureTemplate
+
+    lib = GestureLibrary([GestureTemplate("shocked", np.zeros((1, 52)), kind=GestureKind.FACE)])
+    save_library(lib, root / "config" / "custom_gestures.json")
+    ok = {"reactions": [{"gesture": "shocked", "image": "assets/memes/a.png"}]}
+    s = load_settings(write(root, ok), root)
+    assert s.needs_face_tracking
+    assert s.config.find_reaction("shocked", None) is not None
+    assert s.config.find_reaction("shocked", Handedness.LEFT) is not None
+
+    bad = {"reactions": [{"gesture": "shocked", "image": "assets/memes/a.png", "hand": "left"}]}
+    with pytest.raises(ConfigError, match=r"reactions\[0\]\.hand: 'shocked' is a face expression"):
+        load_settings(write(root, bad), root)
+
+
+def test_hand_only_setup_does_not_need_face_tracking(root):
+    from memecam.config import load_settings
+
+    assert not load_settings(write(root, minimal()), root).needs_face_tracking
+
+
+def test_find_reaction_for_faces_only_uses_any_hand_reactions(root):
+    from memecam.core.types import Handedness
+
+    data = {"reactions": [{"gesture": "Victory", "image": "assets/memes/a.png", "hand": "left"}]}
+    config = load_config(write(root, data), root)
+    assert config.find_reaction("Victory", Handedness.LEFT) is not None
+    assert config.find_reaction("Victory", None) is None

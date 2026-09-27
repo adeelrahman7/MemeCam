@@ -21,9 +21,7 @@
     "corner": "top_right",
     "width_fraction": 0.3,
     "margin_px": 16,
-    "display_seconds": 2.0,
-    "stay_while_held": true,
-    "linger_seconds": 0.5
+    "display_seconds": 2.0
   },
   "custom_gestures": {
     "file": "config/custom_gestures.json",
@@ -54,10 +52,29 @@
     {
       "gesture": "ILoveYou",
       "image": "assets/memes/i_love_you.png"
+    }
+  ],
+  "face": {
+    "model": "models/face_landmarker.task",
+    "num_faces": 1,
+    "min_confidence": 0.5,
+    "smoothing": 0.5
+  },
+  "face_overlays": [
+    {
+      "image": "assets/face/sunglasses.png",
+      "anchor": "eyes",
+      "width": 1.4,
+      "trigger": "Closed_Fist",
+      "linger_seconds": 1.0
     },
     {
-      "gesture": "erm_actually",
-      "image": "assets/memes/erm_actually.png"
+      "image": "assets/face/crown.png",
+      "anchor": "forehead",
+      "width": 1.3,
+      "offset_y": -0.45,
+      "trigger": "Thumb_Up",
+      "linger_seconds": 1.0
     }
   ]
 }

@@ -6,14 +6,16 @@ Pure numpy, no I/O, no MediaPipe, which keeps it easy to unit-test.
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 
 import numpy as np
 
 from memecam.core.types import Handedness, Landmark
 
 NUM_LANDMARKS = 21
+NUM_BLENDSHAPES = 52  # MediaPipe face expression scores (see gestures/expressions.py)
 WRIST = 0
 MIDDLE_MCP = 9  # base knuckle of the middle finger
 
@@ -64,15 +66,31 @@ def pose_distance(a: Pose, b: Pose) -> float:
     return float(np.sqrt(((a - b) ** 2).sum(axis=-1).mean()))
 
 
+class GestureKind(StrEnum):
+    HAND = "hand"  # a hand pose: samples are (n, 21, 2) normalized landmarks
+    FACE = "face"  # a face expression: samples are (n, 52) blendshape scores
+
+
+SAMPLE_SHAPES: dict[GestureKind, tuple[int, ...]] = {
+    GestureKind.HAND: (NUM_LANDMARKS, 2),
+    GestureKind.FACE: (NUM_BLENDSHAPES,),
+}
+
+
 @dataclass(frozen=True, slots=True)
 class GestureTemplate:
     name: str
-    samples: np.ndarray  # (n, 21, 2) normalized poses, not rotation-aligned
-    recorded_with: Handedness | None = None
+    samples: np.ndarray  # hand: (n, 21, 2) poses, not rotation-aligned; face: (n, 52) scores
+    recorded_with: Handedness | None = None  # hands only
+    kind: GestureKind = GestureKind.HAND
 
     def __post_init__(self) -> None:
-        if self.samples.ndim != 3 or self.samples.shape[1:] != (NUM_LANDMARKS, 2):
-            raise ValueError(f"samples must have shape (n, 21, 2), got {self.samples.shape}")
+        expected = SAMPLE_SHAPES[self.kind]
+        if self.samples.ndim != len(expected) + 1 or self.samples.shape[1:] != expected:
+            shape = "(n, " + ", ".join(map(str, expected)) + ")"
+            raise ValueError(
+                f"{self.kind} samples must have shape {shape}, got {self.samples.shape}"
+            )
         if len(self.samples) == 0:
             raise ValueError("a template needs at least one sample")
 
@@ -133,35 +151,69 @@ class TemplateMatcher:
         if self._rotation_invariant:
             pose = align_rotation(pose)
 
-        scored = sorted(
-            (float(np.sqrt(((samples - pose) ** 2).sum(axis=-1).mean(axis=1)).min()), name)
-            for name, samples in self._templates
+        scored = [
+            (float(hand_distances(samples, pose).min()), name) for name, samples in self._templates
+        ]
+        return choose_match(
+            scored,
+            threshold=self._threshold,
+            ambiguity_ratio=self._ratio,
+            sticky=sticky,
+            release_threshold=release_threshold,
         )
-        if sticky is not None:
-            for dist, name in scored:
-                if name == sticky and dist <= release_threshold:
-                    return MatchResult(name, name, dist)
-        best_dist, best_name = scored[0]
-        second = scored[1][0] if len(scored) > 1 else math.inf
-        accepted = best_dist <= self._threshold and best_dist <= self._ratio * second
-        return MatchResult(best_name if accepted else None, best_name, best_dist)
 
 
-def most_diverse(poses: Sequence[Pose], count: int) -> list[int]:
+def choose_match(
+    scored: Sequence[tuple[float, str]],
+    *,
+    threshold: float,
+    ambiguity_ratio: float,
+    sticky: str | None,
+    release_threshold: float,
+) -> MatchResult:
+    """Pick a winner from (distance, name) pairs; shared by hand and face matching.
+
+    - A gesture matched last frame (``sticky``) is kept while within ``release_threshold``.
+    - Otherwise the closest wins if it's within ``threshold`` and clearly closer than the
+      runner-up (best <= ``ambiguity_ratio`` * second best).
+    """
+    if not scored:
+        return MatchResult(None, None, math.inf)
+    ranked = sorted(scored)
+    if sticky is not None:
+        for dist, name in ranked:
+            if name == sticky and dist <= release_threshold:
+                return MatchResult(name, name, dist)
+    best_dist, best_name = ranked[0]
+    second = ranked[1][0] if len(ranked) > 1 else math.inf
+    accepted = best_dist <= threshold and best_dist <= ambiguity_ratio * second
+    return MatchResult(best_name if accepted else None, best_name, best_dist)
+
+
+def hand_distances(stack: np.ndarray, pose: Pose) -> np.ndarray:
+    """RMS landmark distance from every pose in ``stack`` (n, 21, 2) to ``pose``."""
+    return np.sqrt(((stack - pose) ** 2).sum(axis=-1).mean(axis=1))
+
+
+def most_diverse(
+    poses: Sequence[np.ndarray],
+    count: int,
+    distances: Callable[[np.ndarray, np.ndarray], np.ndarray] = hand_distances,
+) -> list[int]:
     """Pick ``count`` indices that spread across the recorded variation (farthest-point).
 
     Evenly spaced frames from a steady hold are nearly identical; this keeps the frames
     that differ most, so whatever variety you showed while recording ends up in the template.
+    ``distances(stack, item)`` returns each stacked sample's distance to ``item``.
     """
     n = len(poses)
     if count >= n:
         return list(range(n))
     stack = np.stack(poses)
     chosen = [n // 2]  # start from the middle of the hold, the most "typical" frame
-    nearest = np.sqrt(((stack - stack[chosen[0]]) ** 2).sum(axis=-1).mean(axis=1))
+    nearest = distances(stack, stack[chosen[0]])
     while len(chosen) < count:
         nxt = int(nearest.argmax())
         chosen.append(nxt)
-        d = np.sqrt(((stack - stack[nxt]) ** 2).sum(axis=-1).mean(axis=1))
-        nearest = np.minimum(nearest, d)
+        nearest = np.minimum(nearest, distances(stack, stack[nxt]))
     return sorted(chosen)

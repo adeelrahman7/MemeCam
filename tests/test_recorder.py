@@ -102,3 +102,47 @@ def test_uses_most_confident_hand_and_majority_handedness():
 def test_rejects_bad_parameters():
     with pytest.raises(ValueError):
         make(frames=0)
+
+
+# --- face expressions -----------------------------------------------------------------
+def face(expr="shocked", **kw):
+    from faces import expression, face_detection
+
+    return face_detection(blendshapes=expression(expr, **kw))
+
+
+def test_records_a_face_expression():
+    from memecam.gestures.templates import GestureKind
+
+    rec = make(countdown=0.0, frames=6, max_samples=3)
+    rec.start("shocked_face", 0.0, GestureKind.FACE)
+    assert rec.kind is GestureKind.FACE
+    frames = [[face(jitter=0.02, seed=i)] for i in range(6)]
+    statuses = [rec.update([detection("rock")], ASPECT, i * DT, f) for i, f in enumerate(frames)]
+    done = statuses[-1]
+    assert done.phase is RecordPhase.DONE and done.kind is GestureKind.FACE
+    assert done.template.kind is GestureKind.FACE
+    assert done.template.samples.shape == (3, 52)
+    assert done.warning == ""
+    assert rec.kind is None
+
+
+def test_face_recording_ignores_hands_and_needs_a_face():
+    from memecam.gestures.templates import GestureKind
+
+    rec = make(countdown=0.0, frames=3, timeout=1.0)
+    rec.start("shocked_face", 0.0, GestureKind.FACE)
+    s = rec.update([detection("rock")], ASPECT, 0.0, [])
+    assert s.message == "Show your face to the camera" and not s.visible
+    statuses = [rec.update([detection("rock")], ASPECT, i * DT, []) for i in range(40)]
+    failed = [x for x in statuses if x is not None and x.phase is RecordPhase.FAILED]
+    assert len(failed) == 1 and "face" in failed[0].message
+
+
+def test_subtle_expression_gets_a_warning():
+    from memecam.gestures.templates import GestureKind
+
+    rec = make(countdown=0.0, frames=3)
+    rec.start("smirk", 0.0, GestureKind.FACE)
+    statuses = [rec.update([], ASPECT, i * DT, [face("slight_smile")]) for i in range(3)]
+    assert "resting face" in statuses[-1].warning
